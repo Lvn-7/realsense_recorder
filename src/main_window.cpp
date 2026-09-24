@@ -3,6 +3,7 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFileDialog>
 #include <QFont>
@@ -12,6 +13,8 @@
 #include <QLineEdit>
 #include <QPainter>
 #include <QPushButton>
+#include <QSpinBox>
+#include <QUrl>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -112,6 +115,13 @@ void MainWindow::buildUi()
 {
     setWindowTitle(QStringLiteral("RealSense 录像机"));
     resize(1100, 820);
+    setStyleSheet(QStringLiteral(
+        "QMainWindow { background: #f5f7fb; }"
+        "QLabel { color: #243247; }"
+        "QComboBox, QLineEdit, QSpinBox { background: white; border: 1px solid #d6dce6; border-radius: 7px; padding: 7px 9px; min-height: 18px; }"
+        "QPushButton { background: white; border: 1px solid #cbd5e1; border-radius: 7px; padding: 8px 13px; color: #243247; }"
+        "QPushButton:hover { background: #eef4ff; border-color: #8db4f5; }"
+        "QPushButton:disabled { color: #9aa4b2; background: #edf0f4; }"));
 
     auto *central = new QWidget(this);
     auto *root = new QVBoxLayout(central);
@@ -152,24 +162,47 @@ void MainWindow::buildUi()
     saveDirectory_->setText(movies + QStringLiteral("/RealSense"));
     QDir().mkpath(saveDirectory_->text());
     browseButton_ = new QPushButton(QStringLiteral("选择位置…"), central);
+    openFolderButton_ = new QPushButton(QStringLiteral("打开此文件夹"), central);
     pathRow->addWidget(saveDirectory_, 1);
     pathRow->addWidget(browseButton_);
+    pathRow->addWidget(openFolderButton_);
     root->addLayout(pathRow);
 
     auto *buttonRow = new QHBoxLayout;
     recordButton_ = new QPushButton(QStringLiteral("● 开始录制"), central);
+    timedRecordButton_ = new QPushButton(QStringLiteral("定时录制"), central);
     stopButton_ = new QPushButton(QStringLiteral("■ 结束录制"), central);
     photoButton_ = new QPushButton(QStringLiteral("拍照"), central);
+    durationSpinBox_ = new QSpinBox(central);
+    durationSpinBox_->setRange(1, 3600);
+    durationSpinBox_->setValue(10);
+    durationSpinBox_->setSuffix(QStringLiteral(" 秒"));
+    durationSpinBox_->setToolTip(QStringLiteral("定时录制时长"));
     recordButton_->setMinimumHeight(42);
     stopButton_->setMinimumHeight(42);
     photoButton_->setMinimumHeight(42);
-    recordButton_->setStyleSheet(QStringLiteral("QPushButton { color: #b00020; font-weight: 600; }"));
+    recordButton_->setStyleSheet(QStringLiteral("QPushButton { background: #2e9d57; color: white; border: 1px solid #258348; font-weight: 700; } QPushButton:hover { background: #258348; }"));
+    timedRecordButton_->setStyleSheet(QStringLiteral("QPushButton { color: #1769aa; font-weight: 700; }"));
+    stopButton_->setStyleSheet(QStringLiteral("QPushButton:disabled { background: #d9dee6; color: #8993a2; border-color: #cbd2dc; } QPushButton:enabled { background: #d9363e; color: white; border-color: #bd2730; font-weight: 700; } QPushButton:enabled:hover { background: #bd2730; }"));
     stopButton_->setEnabled(false);
-    buttonRow->addStretch();
-    buttonRow->addWidget(recordButton_);
-    buttonRow->addWidget(stopButton_);
-    buttonRow->addWidget(photoButton_);
-    buttonRow->addStretch();
+    auto *timedRow = new QHBoxLayout;
+    timedRow->setSpacing(6);
+    timedRow->addWidget(durationSpinBox_);
+    timedRow->addWidget(timedRecordButton_);
+
+    auto *mainRecordRow = new QHBoxLayout;
+    mainRecordRow->setSpacing(6);
+    mainRecordRow->addWidget(recordButton_);
+    mainRecordRow->addWidget(stopButton_);
+
+    auto *photoRow = new QHBoxLayout;
+    photoRow->addWidget(photoButton_);
+
+    buttonRow->addLayout(timedRow, 1);
+    buttonRow->addStretch(1);
+    buttonRow->addLayout(mainRecordRow, 0);
+    buttonRow->addStretch(1);
+    buttonRow->addLayout(photoRow, 1);
     root->addLayout(buttonRow);
 
     status_ = new QLabel(QStringLiteral("就绪"), central);
@@ -181,14 +214,19 @@ void MainWindow::buildUi()
     frameTimer_ = new QTimer(this);
     frameTimer_->setTimerType(Qt::PreciseTimer);
     frameTimer_->setInterval(33);
+    timedStopTimer_ = new QTimer(this);
+    timedStopTimer_->setSingleShot(true);
 
     connect(refreshButton_, &QPushButton::clicked, this, &MainWindow::refreshCameras);
     connect(cameraCombo_, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::cameraChanged);
     connect(resolutionCombo_, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::resolutionChanged);
     connect(frameTimer_, &QTimer::timeout, this, &MainWindow::updateFrame);
     connect(browseButton_, &QPushButton::clicked, this, &MainWindow::chooseSaveDirectory);
+    connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::openSaveDirectory);
     connect(recordButton_, &QPushButton::clicked, this, &MainWindow::startRecording);
+    connect(timedRecordButton_, &QPushButton::clicked, this, &MainWindow::startTimedRecording);
     connect(stopButton_, &QPushButton::clicked, this, &MainWindow::stopRecording);
+    connect(timedStopTimer_, &QTimer::timeout, this, &MainWindow::stopRecording);
     connect(photoButton_, &QPushButton::clicked, this, &MainWindow::takePhoto);
 }
 
@@ -292,6 +330,8 @@ void MainWindow::openSelectedCamera()
     capture_.set(cv::CAP_PROP_BUFFERSIZE, 2);
     frameTimer_->start();
     recordButton_->setEnabled(true);
+    timedRecordButton_->setEnabled(true);
+    durationSpinBox_->setEnabled(true);
     photoButton_->setEnabled(true);
     setStatus(QStringLiteral("实时预览：%1 × %2")
                   .arg(requestedSize.width())
@@ -347,6 +387,12 @@ void MainWindow::chooseSaveDirectory()
     }
 }
 
+void MainWindow::openSaveDirectory()
+{
+    QDir().mkpath(saveDirectory_->text());
+    QDesktopServices::openUrl(QUrl::fromLocalFile(saveDirectory_->text()));
+}
+
 QString MainWindow::timestampedPath(const QString &prefix, const QString &extension) const
 {
     const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
@@ -377,6 +423,8 @@ void MainWindow::startRecording()
     }
 
     recordButton_->setEnabled(false);
+    timedRecordButton_->setEnabled(false);
+    durationSpinBox_->setEnabled(false);
     stopButton_->setEnabled(true);
     browseButton_->setEnabled(false);
     cameraCombo_->setEnabled(false);
@@ -385,15 +433,27 @@ void MainWindow::startRecording()
     setStatus(QStringLiteral("正在录制 MP4：%1").arg(recordingPath_));
 }
 
+void MainWindow::startTimedRecording()
+{
+    startRecording();
+    if (writer_.isOpened()) {
+        timedStopTimer_->start(durationSpinBox_->value() * 1000);
+        setStatus(QStringLiteral("定时录制中，将在 %1 秒后自动保存").arg(durationSpinBox_->value()));
+    }
+}
+
 void MainWindow::stopRecording()
 {
     if (!writer_.isOpened()) {
         return;
     }
     writer_.release();
+    timedStopTimer_->stop();
     const QString completedPath = recordingPath_;
     recordingPath_.clear();
     recordButton_->setEnabled(capture_.isOpened());
+    timedRecordButton_->setEnabled(capture_.isOpened());
+    durationSpinBox_->setEnabled(capture_.isOpened());
     stopButton_->setEnabled(false);
     browseButton_->setEnabled(true);
     cameraCombo_->setEnabled(true);

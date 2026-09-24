@@ -2,6 +2,10 @@
 
 一个轻量的 Ubuntu 原生录像软件。它通过 V4L2/OpenCV 读取 RealSense 的彩色相机，因此不依赖完整的 RealSense SDK。
 
+## 软件界面 Demo
+
+![RealSense Recorder 软件界面 Demo](b7e9edf3be2c41fca8f96ada22279f5e.png)
+
 ## 功能
 
 - 列出当前连接相机的型号、序列号、USB ID、连接速率和视频节点

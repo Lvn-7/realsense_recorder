@@ -16,6 +16,7 @@ class QLabel;
 class QLineEdit;
 class QPaintEvent;
 class QPushButton;
+class QSpinBox;
 class QTimer;
 
 class VideoPreview final : public QWidget {
@@ -53,7 +54,9 @@ private slots:
     void resolutionChanged(int index);
     void updateFrame();
     void chooseSaveDirectory();
+    void openSaveDirectory();
     void startRecording();
+    void startTimedRecording();
     void stopRecording();
     void takePhoto();
 
@@ -72,11 +75,15 @@ private:
     VideoPreview *preview_ = nullptr;
     QLineEdit *saveDirectory_ = nullptr;
     QPushButton *browseButton_ = nullptr;
+    QPushButton *openFolderButton_ = nullptr;
     QPushButton *recordButton_ = nullptr;
+    QPushButton *timedRecordButton_ = nullptr;
     QPushButton *stopButton_ = nullptr;
     QPushButton *photoButton_ = nullptr;
+    QSpinBox *durationSpinBox_ = nullptr;
     QLabel *status_ = nullptr;
     QTimer *frameTimer_ = nullptr;
+    QTimer *timedStopTimer_ = nullptr;
 
     cv::VideoCapture capture_;
     cv::VideoWriter writer_;
