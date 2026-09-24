@@ -2,8 +2,10 @@
 
 #include "camera_discovery.h"
 
+#include <QImage>
 #include <QMainWindow>
 #include <QVector>
+#include <QWidget>
 
 #include <opencv2/core/mat.hpp>
 #include <opencv2/videoio.hpp>
@@ -12,8 +14,28 @@ class QCloseEvent;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QPaintEvent;
 class QPushButton;
 class QTimer;
+
+class VideoPreview final : public QWidget {
+public:
+    explicit VideoPreview(QWidget *parent = nullptr);
+
+    void setFrame(const QImage &frame);
+    void clearFrame();
+    void setExpectedAspect(const QSize &size);
+    QSize sizeHint() const override;
+    bool hasHeightForWidth() const override;
+    int heightForWidth(int width) const override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    QImage frame_;
+    double aspectRatio_ = 16.0 / 9.0;
+};
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -28,6 +50,7 @@ protected:
 private slots:
     void refreshCameras();
     void cameraChanged(int index);
+    void resolutionChanged(int index);
     void updateFrame();
     void chooseSaveDirectory();
     void startRecording();
@@ -43,9 +66,10 @@ private:
 
     QVector<CameraDevice> cameras_;
     QComboBox *cameraCombo_ = nullptr;
+    QComboBox *resolutionCombo_ = nullptr;
     QPushButton *refreshButton_ = nullptr;
     QLabel *deviceInfo_ = nullptr;
-    QLabel *preview_ = nullptr;
+    VideoPreview *preview_ = nullptr;
     QLineEdit *saveDirectory_ = nullptr;
     QPushButton *browseButton_ = nullptr;
     QPushButton *recordButton_ = nullptr;
@@ -59,4 +83,3 @@ private:
     cv::Mat latestFrame_;
     QString recordingPath_;
 };
-

@@ -65,8 +65,17 @@ QString fourccToString(quint32 value)
 struct NodeInfo {
     QString card;
     QStringList formats;
+    QVector<QSize> resolutions;
     int colorScore = -1;
 };
+
+void addResolution(QVector<QSize> &resolutions, int width, int height)
+{
+    const QSize size(width, height);
+    if (width > 0 && height > 0 && !resolutions.contains(size)) {
+        resolutions.append(size);
+    }
+}
 
 void enumerateType(int fd, v4l2_buf_type type, NodeInfo &result)
 {
@@ -76,6 +85,18 @@ void enumerateType(int fd, v4l2_buf_type type, NodeInfo &result)
         const QString fourcc = fourccToString(format.pixelformat);
         if (!result.formats.contains(fourcc)) {
             result.formats.append(fourcc);
+        }
+
+        v4l2_frmsizeenum frameSize{};
+        frameSize.pixel_format = format.pixelformat;
+        for (frameSize.index = 0; ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &frameSize) == 0; ++frameSize.index) {
+            if (frameSize.type == V4L2_FRMSIZE_TYPE_DISCRETE) {
+                addResolution(result.resolutions, frameSize.discrete.width, frameSize.discrete.height);
+            } else if (frameSize.type == V4L2_FRMSIZE_TYPE_STEPWISE ||
+                       frameSize.type == V4L2_FRMSIZE_TYPE_CONTINUOUS) {
+                addResolution(result.resolutions, frameSize.stepwise.min_width, frameSize.stepwise.min_height);
+                addResolution(result.resolutions, frameSize.stepwise.max_width, frameSize.stepwise.max_height);
+            }
         }
 
         int score = 1;
@@ -139,27 +160,23 @@ QString CameraDevice::displayName() const
     return name;
 }
 
-QString CameraDevice::details() const
+QString CameraDevice::simpleDetails() const
 {
-    QStringList lines;
-    lines << QStringLiteral("型号：%1").arg(model.isEmpty() ? QStringLiteral("未知") : model);
-    lines << QStringLiteral("制造商：%1").arg(manufacturer.isEmpty() ? QStringLiteral("未知") : manufacturer);
-    lines << QStringLiteral("序列号：%1").arg(serial.isEmpty() ? QStringLiteral("未知") : serial);
-    if (!vendorId.isEmpty() || !productId.isEmpty()) {
-        lines << QStringLiteral("USB ID：%1:%2").arg(vendorId, productId);
-    }
-    if (!usbSpeed.isEmpty()) {
-        lines << QStringLiteral("USB 速率：%1 Mbps").arg(usbSpeed);
-    }
-    lines << QStringLiteral("彩色节点：%1").arg(colorNode.isEmpty() ? QStringLiteral("未找到") : colorNode);
-    lines << QStringLiteral("视频节点：%1").arg(videoNodes.join(QStringLiteral(", ")));
-    for (const QString &node : videoNodes) {
-        const QStringList nodeFormats = formats.value(node);
-        if (!nodeFormats.isEmpty()) {
-            lines << QStringLiteral("  %1 格式：%2").arg(node, nodeFormats.join(QStringLiteral(", ")));
+    return QStringLiteral("型号：%1    序列号：%2")
+        .arg(model.isEmpty() ? QStringLiteral("未知") : model,
+             serial.isEmpty() ? QStringLiteral("未知") : serial);
+}
+
+QVector<QSize> CameraDevice::colorResolutions() const
+{
+    QVector<QSize> result = resolutions.value(colorNode);
+    std::sort(result.begin(), result.end(), [](const QSize &a, const QSize &b) {
+        if (a.width() * a.height() != b.width() * b.height()) {
+            return a.width() * a.height() > b.width() * b.height();
         }
-    }
-    return lines.join('\n');
+        return a.width() > b.width();
+    });
+    return result;
 }
 
 QVector<CameraDevice> discoverCameras()
@@ -192,6 +209,7 @@ QVector<CameraDevice> discoverCameras()
         camera.videoNodes.append(node);
         const NodeInfo nodeInfo = inspectVideoNode(node);
         camera.formats.insert(node, nodeInfo.formats);
+        camera.resolutions.insert(node, nodeInfo.resolutions);
         if (camera.model.isEmpty()) {
             camera.model = nodeInfo.card;
         }
@@ -212,4 +230,3 @@ QVector<CameraDevice> discoverCameras()
     }
     return cameras;
 }
-

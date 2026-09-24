@@ -10,8 +10,7 @@
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMessageBox>
-#include <QPixmap>
+#include <QPainter>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QTimer>
@@ -20,6 +19,82 @@
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+
+VideoPreview::VideoPreview(QWidget *parent)
+    : QWidget(parent)
+{
+    setMinimumSize(640, 360);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    setAutoFillBackground(false);
+}
+
+void VideoPreview::setFrame(const QImage &frame)
+{
+    frame_ = frame;
+    if (!frame_.isNull()) {
+        aspectRatio_ = static_cast<double>(frame_.width()) / frame_.height();
+    }
+    updateGeometry();
+    update();
+}
+
+void VideoPreview::clearFrame()
+{
+    frame_ = QImage();
+    update();
+}
+
+void VideoPreview::setExpectedAspect(const QSize &size)
+{
+    if (size.width() > 0 && size.height() > 0) {
+        aspectRatio_ = static_cast<double>(size.width()) / size.height();
+        updateGeometry();
+        update();
+    }
+}
+
+QSize VideoPreview::sizeHint() const
+{
+    return QSize(960, qRound(960.0 / aspectRatio_));
+}
+
+bool VideoPreview::hasHeightForWidth() const
+{
+    return true;
+}
+
+int VideoPreview::heightForWidth(int width) const
+{
+    return qRound(width / aspectRatio_);
+}
+
+void VideoPreview::paintEvent(QPaintEvent *event)
+{
+    Q_UNUSED(event)
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+    if (frame_.isNull()) {
+        painter.fillRect(rect(), QColor(QStringLiteral("#111111")));
+        painter.setPen(QColor(QStringLiteral("#bbbbbb")));
+        painter.drawText(rect(), Qt::AlignCenter, QStringLiteral("等待相机画面"));
+        return;
+    }
+
+    const double sourceRatio = static_cast<double>(frame_.width()) / frame_.height();
+    const double targetRatio = static_cast<double>(width()) / qMax(1, height());
+    QRectF source(0, 0, frame_.width(), frame_.height());
+    if (sourceRatio > targetRatio) {
+        const double cropWidth = frame_.height() * targetRatio;
+        source.setX((frame_.width() - cropWidth) / 2.0);
+        source.setWidth(cropWidth);
+    } else if (sourceRatio < targetRatio) {
+        const double cropHeight = frame_.width() / targetRatio;
+        source.setY((frame_.height() - cropHeight) / 2.0);
+        source.setHeight(cropHeight);
+    }
+    painter.drawImage(rect(), frame_, source);
+}
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -47,9 +122,14 @@ void MainWindow::buildUi()
     auto *cameraLabel = new QLabel(QStringLiteral("当前相机："), central);
     cameraCombo_ = new QComboBox(central);
     cameraCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    auto *resolutionLabel = new QLabel(QStringLiteral("分辨率："), central);
+    resolutionCombo_ = new QComboBox(central);
+    resolutionCombo_->setMinimumWidth(130);
     refreshButton_ = new QPushButton(QStringLiteral("刷新"), central);
     cameraRow->addWidget(cameraLabel);
     cameraRow->addWidget(cameraCombo_, 1);
+    cameraRow->addWidget(resolutionLabel);
+    cameraRow->addWidget(resolutionCombo_);
     cameraRow->addWidget(refreshButton_);
     root->addLayout(cameraRow);
 
@@ -58,14 +138,7 @@ void MainWindow::buildUi()
     deviceInfo_->setStyleSheet(QStringLiteral("QLabel { background: #f2f4f7; border-radius: 6px; padding: 8px; }"));
     root->addWidget(deviceInfo_);
 
-    preview_ = new QLabel(QStringLiteral("等待相机画面"), central);
-    preview_->setAlignment(Qt::AlignCenter);
-    preview_->setMinimumSize(640, 420);
-    preview_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    preview_->setStyleSheet(QStringLiteral("QLabel { background: #111; color: #bbb; border-radius: 6px; }"));
-    QFont previewFont = preview_->font();
-    previewFont.setPointSize(14);
-    preview_->setFont(previewFont);
+    preview_ = new VideoPreview(central);
     root->addWidget(preview_, 1);
 
     auto *pathRow = new QHBoxLayout;
@@ -111,6 +184,7 @@ void MainWindow::buildUi()
 
     connect(refreshButton_, &QPushButton::clicked, this, &MainWindow::refreshCameras);
     connect(cameraCombo_, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::cameraChanged);
+    connect(resolutionCombo_, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::resolutionChanged);
     connect(frameTimer_, &QTimer::timeout, this, &MainWindow::updateFrame);
     connect(browseButton_, &QPushButton::clicked, this, &MainWindow::chooseSaveDirectory);
     connect(recordButton_, &QPushButton::clicked, this, &MainWindow::startRecording);
@@ -125,6 +199,9 @@ void MainWindow::refreshCameras()
 
     cameraCombo_->blockSignals(true);
     cameraCombo_->clear();
+    resolutionCombo_->blockSignals(true);
+    resolutionCombo_->clear();
+    resolutionCombo_->blockSignals(false);
     cameras_ = discoverCameras();
     for (const CameraDevice &camera : cameras_) {
         cameraCombo_->addItem(camera.displayName());
@@ -133,7 +210,7 @@ void MainWindow::refreshCameras()
 
     if (cameras_.isEmpty()) {
         deviceInfo_->setText(QStringLiteral("没有检测到视频相机"));
-        preview_->setText(QStringLiteral("请连接相机后点击“刷新”"));
+        preview_->clearFrame();
         recordButton_->setEnabled(false);
         photoButton_->setEnabled(false);
         setStatus(QStringLiteral("没有检测到相机"), true);
@@ -150,7 +227,33 @@ void MainWindow::cameraChanged(int index)
     if (index < 0 || index >= cameras_.size()) {
         return;
     }
-    deviceInfo_->setText(cameras_.at(index).details());
+    const CameraDevice &camera = cameras_.at(index);
+    deviceInfo_->setText(camera.simpleDetails());
+
+    resolutionCombo_->blockSignals(true);
+    resolutionCombo_->clear();
+    int preferredIndex = 0;
+    const QVector<QSize> resolutions = camera.colorResolutions();
+    for (int i = 0; i < resolutions.size(); ++i) {
+        const QSize size = resolutions.at(i);
+        resolutionCombo_->addItem(
+            QStringLiteral("%1 × %2").arg(size.width()).arg(size.height()), size);
+        if (size == QSize(1280, 720)) {
+            preferredIndex = i;
+        }
+    }
+    resolutionCombo_->setCurrentIndex(preferredIndex);
+    resolutionCombo_->setEnabled(!resolutions.isEmpty());
+    resolutionCombo_->blockSignals(false);
+    openSelectedCamera();
+}
+
+void MainWindow::resolutionChanged(int index)
+{
+    if (index < 0 || writer_.isOpened()) {
+        return;
+    }
+    closeCamera();
     openSelectedCamera();
 }
 
@@ -166,21 +269,33 @@ void MainWindow::openSelectedCamera()
         return;
     }
 
+    const QSize requestedSize = resolutionCombo_->currentData().toSize();
+    preview_->setExpectedAspect(requestedSize);
+
     capture_.open(node.toStdString(), cv::CAP_V4L2);
     if (!capture_.isOpened()) {
-        preview_->setText(QStringLiteral("无法打开 %1").arg(node));
         setStatus(QStringLiteral("无法打开彩色节点 %1，请检查权限或是否被其他程序占用").arg(node), true);
         return;
     }
 
-    capture_.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
-    capture_.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
+    const QStringList formats = cameras_.at(index).formats.value(node);
+    if (formats.contains(QStringLiteral("MJPG"))) {
+        capture_.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+    } else if (formats.contains(QStringLiteral("YUYV"))) {
+        capture_.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('Y', 'U', 'Y', 'V'));
+    }
+    if (requestedSize.isValid()) {
+        capture_.set(cv::CAP_PROP_FRAME_WIDTH, requestedSize.width());
+        capture_.set(cv::CAP_PROP_FRAME_HEIGHT, requestedSize.height());
+    }
     capture_.set(cv::CAP_PROP_FPS, 30);
     capture_.set(cv::CAP_PROP_BUFFERSIZE, 2);
     frameTimer_->start();
     recordButton_->setEnabled(true);
     photoButton_->setEnabled(true);
-    setStatus(QStringLiteral("实时预览：%1").arg(node));
+    setStatus(QStringLiteral("实时预览：%1 × %2")
+                  .arg(requestedSize.width())
+                  .arg(requestedSize.height()));
 }
 
 void MainWindow::closeCamera()
@@ -193,8 +308,7 @@ void MainWindow::closeCamera()
     }
     latestFrame_.release();
     if (preview_) {
-        preview_->clear();
-        preview_->setText(QStringLiteral("等待相机画面"));
+        preview_->clearFrame();
     }
     if (recordButton_) {
         recordButton_->setEnabled(false);
@@ -220,8 +334,7 @@ void MainWindow::updateFrame()
     cv::Mat rgb;
     cv::cvtColor(latestFrame_, rgb, cv::COLOR_BGR2RGB);
     const QImage image(rgb.data, rgb.cols, rgb.rows, static_cast<int>(rgb.step), QImage::Format_RGB888);
-    preview_->setPixmap(QPixmap::fromImage(image.copy()).scaled(
-        preview_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    preview_->setFrame(image.copy());
 }
 
 void MainWindow::chooseSaveDirectory()
@@ -267,6 +380,7 @@ void MainWindow::startRecording()
     stopButton_->setEnabled(true);
     browseButton_->setEnabled(false);
     cameraCombo_->setEnabled(false);
+    resolutionCombo_->setEnabled(false);
     refreshButton_->setEnabled(false);
     setStatus(QStringLiteral("正在录制 MP4：%1").arg(recordingPath_));
 }
@@ -283,6 +397,7 @@ void MainWindow::stopRecording()
     stopButton_->setEnabled(false);
     browseButton_->setEnabled(true);
     cameraCombo_->setEnabled(true);
+    resolutionCombo_->setEnabled(true);
     refreshButton_->setEnabled(true);
     setStatus(QStringLiteral("录像已保存：%1").arg(completedPath));
 }
@@ -318,4 +433,3 @@ void MainWindow::closeEvent(QCloseEvent *event)
     closeCamera();
     event->accept();
 }
-

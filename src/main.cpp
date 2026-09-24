@@ -24,7 +24,17 @@ int main(int argc, char *argv[])
             return 1;
         }
         for (int i = 0; i < cameras.size(); ++i) {
-            output << "Camera " << i + 1 << "\n" << cameras.at(i).details() << "\n\n";
+            const CameraDevice &camera = cameras.at(i);
+            output << "Camera " << i + 1 << "\n" << camera.simpleDetails() << "\n";
+            output << "Resolutions: ";
+            const QVector<QSize> resolutions = camera.colorResolutions();
+            for (int j = 0; j < resolutions.size(); ++j) {
+                if (j > 0) {
+                    output << ", ";
+                }
+                output << resolutions.at(j).width() << "x" << resolutions.at(j).height();
+            }
+            output << "\n\n";
         }
         return 0;
     }

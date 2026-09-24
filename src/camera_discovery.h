@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMap>
+#include <QSize>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -15,10 +16,11 @@ struct CameraDevice {
     QString colorNode;
     QStringList videoNodes;
     QMap<QString, QStringList> formats;
+    QMap<QString, QVector<QSize>> resolutions;
 
     QString displayName() const;
-    QString details() const;
+    QString simpleDetails() const;
+    QVector<QSize> colorResolutions() const;
 };
 
 QVector<CameraDevice> discoverCameras();
-
